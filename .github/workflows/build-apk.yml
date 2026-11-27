@@ -4,7 +4,8 @@ name: Build Raseef Al Estlam APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
@@ -29,9 +30,11 @@ jobs:
         id: locate
         run: |
           set -e
-          ZIP="$(find . -maxdepth 1 -type f -name 'Raseef_Al_Estlam_v1.5_SOURCE.zip' -print -quit)"
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: v1.5 source ZIP not found"
+
+          ZIP="Raseef_Al_Estlam_v1.5_SOURCE.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: Source ZIP not found: $ZIP"
             exit 1
           fi
 
@@ -40,20 +43,54 @@ jobs:
 
           PROJECT_DIR="$(dirname "$(find build_source -type f -name settings.gradle -print -quit)")"
 
-          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "ERROR: Android project files not found"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: settings.gradle not found"
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: app/build.gradle not found"
             exit 1
           fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Fix duplicate launcher icon resources
+        run: |
+          set -e
+
+          echo "Removing conflicting launcher XML resources..."
+
+          find build_source -type f \
+            -path '*/res/mipmap-*/ic_launcher.xml' \
+            -print -delete
+
+          echo "Checking launcher PNG files..."
+
+          find build_source -type f \
+            -path '*/res/mipmap-*/ic_launcher.png' \
+            -print
 
       - name: Build APK
         run: |
           cd "${{ steps.locate.outputs.project_dir }}"
           gradle assembleDebug --no-daemon
 
+      - name: Verify APK
+        run: |
+          APK="${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK file was not generated"
+            exit 1
+          fi
+
+          echo "APK generated successfully"
+          ls -lh "$APK"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Raseef-Al-Estlam-APK
           path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

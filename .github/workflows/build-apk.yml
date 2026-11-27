@@ -4,8 +4,9 @@ name: Build Raseef Al Estlam APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    paths:
+      - '*.zip'
+      - '.github/workflows/build-apk.yml'
 
 jobs:
   build:
@@ -21,53 +22,98 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify Java
-        run: java -version
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Extract Android project
+      - name: Locate project ZIP
         shell: bash
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP not found"
+            echo "ERROR: Project ZIP not found."
             exit 1
           fi
 
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract project
+        run: |
           mkdir -p extracted_project
-          unzip -q "$ZIP_FILE" -d extracted_project
+          unzip -o "$ZIP_FILE" -d extracted_project
 
-          SETTINGS_FILE=$(find extracted_project \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
-
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found"
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Create JVM compatibility fix
+      - name: Locate Android project
         shell: bash
         run: |
-          cat > "$RUNNER_TEMP/force-jvm.gradle" <<'EOF'
-          allprojects {
-              plugins.withId("org.jetbrains.kotlin.android") {
-                  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                      kotlinOptions.jvmTarget = "1.8"
-                  }
-              }
-          }
-          EOF
+          APP_FILE=$(find extracted_project -type f -path "*/app/build.gradle" | head -n 1)
 
-      - name: Show project files
+          if [ -z "$APP_FILE" ]; then
+            echo "ERROR: app/build.gradle not found."
+            exit 1
+          fi
+
+          PROJECT_DIR="${APP_FILE%/app/build.gradle}"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found: $PROJECT_DIR"
+
+      - name: Fix Kotlin JVM target
+        shell: bash
         run: |
-          echo "Project: $PROJECT_DIR"
-          find "$PROJECT_DIR/app" -maxdepth 2 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) -print
+          python3 - <<'PY'
+          import os
+          import re
+
+          path = os.path.join(os.environ["PROJECT_DIR"], "app", "build.gradle")
+
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          block = """android {
+              kotlinOptions {
+                  jvmTarget = '1.8'
+              }
+          """
+
+          if re.search(r'kotlinOptions\s*\{', content):
+              content = re.sub(
+                  r'kotlinOptions\s*\{[^}]*\}',
+                  "kotlinOptions { jvmTarget = '1.8' }",
+                  content,
+                  count=1
+              )
+          else:
+              match = re.search(r'android\s*\{', content)
+              if not match:
+                  raise SystemExit("ERROR: android block not found")
+              content = content[:match.end()] + """
+              kotlinOptions {
+                  jvmTarget = '1.8'
+              }
+          """ + content[match.end():]
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print("Kotlin JVM target set to 1.8")
+          PY
+
+          echo "===== Updated app/build.gradle ====="
+          sed -n '1,100p' "$PROJECT_DIR/app/build.gradle"
+
+      - name: Show MainActivity source
+        run: |
+          SOURCE=$(find "$PROJECT_DIR/app/src/main/java" -name "MainActivity.kt" | head -n 1)
+
+          if [ -z "$SOURCE" ]; then
+            echo "ERROR: MainActivity.kt not found."
+            exit 1
+          fi
+
+          echo "Building source: $SOURCE"
 
       - name: Build APK
-        run: |
-          gradle -I "$RUNNER_TEMP/force-jvm.gradle" -p "$PROJECT_DIR" assembleDebug
+        run: gradle -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -36,6 +36,7 @@ jobs:
           fi
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Found ZIP: $ZIP_FILE"
 
       - name: Extract project
         run: |
@@ -69,12 +70,6 @@ jobs:
           with open(path, "r", encoding="utf-8") as f:
               content = f.read()
 
-          block = """android {
-              kotlinOptions {
-                  jvmTarget = '1.8'
-              }
-          """
-
           if re.search(r'kotlinOptions\s*\{', content):
               content = re.sub(
                   r'kotlinOptions\s*\{[^}]*\}',
@@ -86,11 +81,12 @@ jobs:
               match = re.search(r'android\s*\{', content)
               if not match:
                   raise SystemExit("ERROR: android block not found")
-              content = content[:match.end()] + """
-              kotlinOptions {
-                  jvmTarget = '1.8'
-              }
-          """ + content[match.end():]
+
+              content = (
+                  content[:match.end()]
+                  + "\n    kotlinOptions { jvmTarget = '1.8' }\n"
+                  + content[match.end():]
+              )
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(content)
@@ -98,10 +94,8 @@ jobs:
           print("Kotlin JVM target set to 1.8")
           PY
 
-          echo "===== Updated app/build.gradle ====="
-          sed -n '1,100p' "$PROJECT_DIR/app/build.gradle"
-
-      - name: Show MainActivity source
+      - name: Display Kotlin error context
+        shell: bash
         run: |
           SOURCE=$(find "$PROJECT_DIR/app/src/main/java" -name "MainActivity.kt" | head -n 1)
 
@@ -110,7 +104,12 @@ jobs:
             exit 1
           fi
 
-          echo "Building source: $SOURCE"
+          echo "======================================"
+          echo "BUILDING SOURCE: $SOURCE"
+          echo "MAINACTIVITY LINES 135-155"
+          echo "======================================"
+
+          nl -ba "$SOURCE" | sed -n '135,155p'
 
       - name: Build APK
         run: gradle -p "$PROJECT_DIR" assembleDebug

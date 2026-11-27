@@ -1,3 +1,4 @@
+
 name: Build Android APK
 
 on:
@@ -12,6 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Get repository files
         uses: actions/checkout@v4
@@ -28,22 +30,37 @@ jobs:
           set -euo pipefail
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "لم يتم العثور على ملف ZIP في الصفحة الرئيسية للمستودع."
+            echo "لم يتم العثور على ملف ZIP."
             exit 1
           fi
           mkdir -p extracted_project
           unzip -q "$ZIP_FILE" -d extracted_project
           SETTINGS_FILE="$(find extracted_project -type f -name settings.gradle -print -quit)"
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ملف settings.gradle غير موجود داخل ملف ZIP."
+            echo "ملف settings.gradle غير موجود."
             exit 1
           fi
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "مجلد app أو ملف app/build.gradle غير موجود داخل المشروع."
+            echo "ملف app/build.gradle غير موجود."
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Fix Java and Kotlin versions
+        shell: bash
+        run: |
+          python3 - "$PROJECT_DIR/app/build.gradle" <<'PY'
+          import sys
+          from pathlib import Path
+          p = Path(sys.argv[1])
+          s = p.read_text()
+          s = s.replace("VERSION_1_8", "VERSION_17")
+          s = s.replace('"1.8"', '"17"')
+          s = s.replace("'1.8'", "'17'")
+          p.write_text(s)
+          print("Java target settings updated.")
+          PY
 
       - name: Build debug APK
         run: gradle -p "$PROJECT_DIR" assembleDebug

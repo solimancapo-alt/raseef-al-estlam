@@ -4,9 +4,8 @@ name: Build Raseef Al Estlam APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '*.zip'
-      - '.github/workflows/build-apk.yml'
+    branches:
+      - main
 
 jobs:
   build:
@@ -16,66 +15,66 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      - name: Locate project ZIP
+      - name: Verify Java
+        run: java -version
+
+      - name: Extract Android project
         shell: bash
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP file not found."
+            echo "ERROR: ZIP not found"
             exit 1
           fi
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "Found: $ZIP_FILE"
-
-      - name: Extract project
-        run: |
           mkdir -p extracted_project
-          unzip -o "$ZIP_FILE" -d extracted_project
+          unzip -q "$ZIP_FILE" -d extracted_project
 
-      - name: Locate Android project
+          SETTINGS_FILE=$(find extracted_project \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle not found"
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Create JVM compatibility fix
         shell: bash
         run: |
-          PROJECT_DIR=""
+          cat > "$RUNNER_TEMP/force-jvm.gradle" <<'EOF'
+          allprojects {
+              tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
+                  sourceCompatibility = "17"
+                  targetCompatibility = "17"
+              }
 
-          for file in $(find extracted_project -type f \
-            \( -name "build.gradle" -o -name "build.gradle.kts" \)); do
+              plugins.withId("org.jetbrains.kotlin.android") {
+                  tasks.configureEach { task ->
+                      if (task.name.toLowerCase().contains("kotlin")) {
+                          task.kotlinOptions.jvmTarget = "17"
+                      }
+                  }
+              }
+          }
+          EOF
 
-            if [[ "$file" == */app/build.gradle || \
-                  "$file" == */app/build.gradle.kts ]]; then
-              PROJECT_DIR="${file%/app/*}"
-              break
-            fi
-          done
-
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android app module not found."
-            find extracted_project -type f
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found: $PROJECT_DIR"
-
-      - name: Show MainActivity source
+      - name: Show project files
         run: |
-          SOURCE=$(find "$PROJECT_DIR/app/src/main/java" \
-            -name "MainActivity.kt" | head -n 1)
-
-          if [ -z "$SOURCE" ]; then
-            echo "ERROR: MainActivity.kt not found."
-            exit 1
-          fi
-
-          echo "Building source: $SOURCE"
-          nl -ba "$SOURCE" | sed -n '135,155p'
+          echo "Project: $PROJECT_DIR"
+          find "$PROJECT_DIR/app" -maxdepth 2 -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) -print
 
       - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug
+        run: |
+          gradle -I "$RUNNER_TEMP/force-jvm.gradle" -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

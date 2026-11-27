@@ -27,14 +27,14 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP file not found in repository root."
+            echo "ERROR: Project ZIP file not found."
             exit 1
           fi
 
           mkdir extracted_project
           unzip -q "$ZIP_FILE" -d extracted_project
 
-          SETTINGS_FILE=$(find extracted_project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
+          SETTINGS_FILE=$(find extracted_project \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle not found."
@@ -44,21 +44,21 @@ jobs:
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Fix Java and Kotlin compatibility
+      - name: Fix Java Kotlin and source code
         shell: bash
         run: |
           python3 - <<'PY'
           import os
           import re
+          from pathlib import Path
 
-          project = os.environ["PROJECT_DIR"]
-          gradle_file = os.path.join(project, "app", "build.gradle")
+          project = Path(os.environ["PROJECT_DIR"])
+          gradle_file = project / "app" / "build.gradle"
 
-          if not os.path.isfile(gradle_file):
+          if not gradle_file.is_file():
               raise SystemExit("ERROR: app/build.gradle not found")
 
-          with open(gradle_file, "r", encoding="utf-8") as f:
-              content = f.read()
+          content = gradle_file.read_text(encoding="utf-8")
 
           java_block = """
               compileOptions {
@@ -78,7 +78,7 @@ jobs:
           else:
               content = re.sub(
                   r"(android\s*\{)",
-                  r"\1\n" + java_block,
+                  lambda m: m.group(1) + "\n" + java_block,
                   content,
                   count=1
               )
@@ -105,11 +105,32 @@ jobs:
                   count=1
               )
 
-          with open(gradle_file, "w", encoding="utf-8") as f:
-              f.write(content)
-
+          gradle_file.write_text(content, encoding="utf-8")
           print("Java and Kotlin targets set to 17.")
 
+          kotlin_files = list(project.rglob("MainActivity.kt"))
+
+          if not kotlin_files:
+              raise SystemExit("ERROR: MainActivity.kt not found")
+
+          fixed = False
+
+          for kotlin_file in kotlin_files:
+              source = kotlin_file.read_text(encoding="utf-8")
+
+              updated = re.sub(
+                  r"\bsingleLine\s*=\s*true\b",
+                  "setSingleLine(true)",
+                  source
+              )
+
+              if updated != source:
+                  kotlin_file.write_text(updated, encoding="utf-8")
+                  fixed = True
+                  print("Fixed singleLine in:", kotlin_file)
+
+          if not fixed:
+              print("No singleLine issue found; source was left unchanged.")
           PY
 
       - name: Build APK
@@ -119,6 +140,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Raseef-Al-Estlam-APK
-          path: |
-            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

@@ -94,22 +94,50 @@ jobs:
           print("Kotlin JVM target set to 1.8")
           PY
 
-      - name: Display Kotlin error context
+      - name: Fix MainActivity button call
         shell: bash
         run: |
-          SOURCE=$(find "$PROJECT_DIR/app/src/main/java" -name "MainActivity.kt" | head -n 1)
+          python3 - <<'PY'
+          import os
 
-          if [ -z "$SOURCE" ]; then
-            echo "ERROR: MainActivity.kt not found."
-            exit 1
-          fi
+          path = os.path.join(
+              os.environ["PROJECT_DIR"],
+              "app", "src", "main", "java",
+              "com", "soliman", "counter", "MainActivity.kt"
+          )
 
-          echo "======================================"
-          echo "BUILDING SOURCE: $SOURCE"
-          echo "MAINACTIVITY LINES 135-155"
-          echo "======================================"
+          with open(path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          nl -ba "$SOURCE" | sed -n '135,155p'
+          old = '''showButton = button(if (tallyOnly) "عرض الكل" else "إظهار التقفيل") {
+                      tallyOnly = !tallyOnly; refresh()
+                  }'''
+
+          new = '''showButton = button(if (tallyOnly) "عرض الكل" else "إظهار التقفيل", action = {
+                      tallyOnly = !tallyOnly; refresh()
+                  })'''
+
+          if content.count(old) != 1:
+              raise SystemExit(
+                  "ERROR: Expected button code was not found exactly once. "
+                  "No automatic change was made."
+              )
+
+          content = content.replace(old, new, 1)
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print("MainActivity button call fixed successfully.")
+          PY
+
+      - name: Display corrected source
+        shell: bash
+        run: |
+          SOURCE="$PROJECT_DIR/app/src/main/java/com/soliman/counter/MainActivity.kt"
+
+          echo "===== CORRECTED MAINACTIVITY ====="
+          nl -ba "$SOURCE" | sed -n '140,151p'
 
       - name: Build APK
         run: gradle -p "$PROJECT_DIR" assembleDebug

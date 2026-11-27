@@ -1,5 +1,5 @@
 
-name: Build Android APK
+name: Build Raseef Al Estlam APK
 
 on:
   workflow_dispatch:
@@ -7,67 +7,118 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get repository files
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Java
+      - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Find and extract Android project ZIP
+      - name: Extract Android project
         shell: bash
         run: |
-          set -euo pipefail
-          ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)"
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "لم يتم العثور على ملف ZIP."
+            echo "ERROR: Project ZIP file not found in repository root."
             exit 1
           fi
-          mkdir -p extracted_project
+
+          mkdir extracted_project
           unzip -q "$ZIP_FILE" -d extracted_project
-          SETTINGS_FILE="$(find extracted_project -type f -name settings.gradle -print -quit)"
+
+          SETTINGS_FILE=$(find extracted_project -name settings.gradle -o -name settings.gradle.kts | head -n 1)
+
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ملف settings.gradle غير موجود."
+            echo "ERROR: settings.gradle not found."
             exit 1
           fi
-          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
-          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
-            echo "ملف app/build.gradle غير موجود."
-            exit 1
-          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Fix Java and Kotlin versions
+      - name: Fix Java and Kotlin compatibility
         shell: bash
         run: |
-          python3 - "$PROJECT_DIR/app/build.gradle" <<'PY'
-          import sys
-          from pathlib import Path
-          p = Path(sys.argv[1])
-          s = p.read_text()
-          s = s.replace("VERSION_1_8", "VERSION_17")
-          s = s.replace('"1.8"', '"17"')
-          s = s.replace("'1.8'", "'17'")
-          p.write_text(s)
-          print("Java target settings updated.")
+          python3 - <<'PY'
+          import os
+          import re
+
+          project = os.environ["PROJECT_DIR"]
+          gradle_file = os.path.join(project, "app", "build.gradle")
+
+          if not os.path.isfile(gradle_file):
+              raise SystemExit("ERROR: app/build.gradle not found")
+
+          with open(gradle_file, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          java_block = """
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          """
+
+          if "compileOptions" in content:
+              content = re.sub(
+                  r"compileOptions\s*\{.*?\}",
+                  java_block.strip(),
+                  content,
+                  count=1,
+                  flags=re.S
+              )
+          else:
+              content = re.sub(
+                  r"(android\s*\{)",
+                  r"\1\n" + java_block,
+                  content,
+                  count=1
+              )
+
+          if re.search(r"kotlinOptions\s*\{", content):
+              if re.search(r"jvmTarget\s*=", content):
+                  content = re.sub(
+                      r"jvmTarget\s*=\s*['\"][^'\"]+['\"]",
+                      'jvmTarget = "17"',
+                      content
+                  )
+              else:
+                  content = re.sub(
+                      r"(kotlinOptions\s*\{)",
+                      r'\1\n        jvmTarget = "17"',
+                      content,
+                      count=1
+                  )
+          else:
+              content = re.sub(
+                  r"(android\s*\{)",
+                  r'\1\n    kotlinOptions { jvmTarget = "17" }\n',
+                  content,
+                  count=1
+              )
+
+          with open(gradle_file, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print("Java and Kotlin targets set to 17.")
+
           PY
 
-      - name: Build debug APK
+      - name: Build APK
         run: gradle -p "$PROJECT_DIR" assembleDebug
 
-      - name: Save APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Raseef-Al-Estlam-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

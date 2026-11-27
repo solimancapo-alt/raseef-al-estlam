@@ -52,16 +52,9 @@ jobs:
         run: |
           cat > "$RUNNER_TEMP/force-jvm.gradle" <<'EOF'
           allprojects {
-              tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
-                  sourceCompatibility = "17"
-                  targetCompatibility = "17"
-              }
-
               plugins.withId("org.jetbrains.kotlin.android") {
-                  tasks.configureEach { task ->
-                      if (task.name.toLowerCase().contains("kotlin")) {
-                          task.kotlinOptions.jvmTarget = "17"
-                      }
+                  tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                      kotlinOptions.jvmTarget = "1.8"
                   }
               }
           }

@@ -4,8 +4,9 @@ name: Build Raseef Al Estlam APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    paths:
+      - '*.zip'
+      - '.github/workflows/build-apk.yml'
 
 jobs:
   build:
@@ -15,13 +16,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
 
-      - name: Extract Android project
+      - name: Locate project ZIP
         shell: bash
         run: |
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
@@ -31,107 +29,50 @@ jobs:
             exit 1
           fi
 
-          mkdir extracted_project
-          unzip -q "$ZIP_FILE" -d extracted_project
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Found: $ZIP_FILE"
 
-          SETTINGS_FILE=$(find extracted_project \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
+      - name: Extract project
+        run: |
+          mkdir -p extracted_project
+          unzip -o "$ZIP_FILE" -d extracted_project
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERROR: settings.gradle not found."
+      - name: Locate Android project
+        shell: bash
+        run: |
+          PROJECT_DIR=""
+
+          for file in $(find extracted_project -type f \
+            \( -name "build.gradle" -o -name "build.gradle.kts" \)); do
+
+            if [[ "$file" == */app/build.gradle || \
+                  "$file" == */app/build.gradle.kts ]]; then
+              PROJECT_DIR="${file%/app/*}"
+              break
+            fi
+          done
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android app module not found."
+            find extracted_project -type f
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project found: $PROJECT_DIR"
 
-      - name: Fix Java Kotlin and source code
-        shell: bash
+      - name: Show MainActivity source
         run: |
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
+          SOURCE=$(find "$PROJECT_DIR/app/src/main/java" \
+            -name "MainActivity.kt" | head -n 1)
 
-          project = Path(os.environ["PROJECT_DIR"])
-          gradle_file = project / "app" / "build.gradle"
+          if [ -z "$SOURCE" ]; then
+            echo "ERROR: MainActivity.kt not found."
+            exit 1
+          fi
 
-          if not gradle_file.is_file():
-              raise SystemExit("ERROR: app/build.gradle not found")
-
-          content = gradle_file.read_text(encoding="utf-8")
-
-          java_block = """
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          """
-
-          if "compileOptions" in content:
-              content = re.sub(
-                  r"compileOptions\s*\{.*?\}",
-                  java_block.strip(),
-                  content,
-                  count=1,
-                  flags=re.S
-              )
-          else:
-              content = re.sub(
-                  r"(android\s*\{)",
-                  lambda m: m.group(1) + "\n" + java_block,
-                  content,
-                  count=1
-              )
-
-          if re.search(r"kotlinOptions\s*\{", content):
-              if re.search(r"jvmTarget\s*=", content):
-                  content = re.sub(
-                      r"jvmTarget\s*=\s*['\"][^'\"]+['\"]",
-                      'jvmTarget = "17"',
-                      content
-                  )
-              else:
-                  content = re.sub(
-                      r"(kotlinOptions\s*\{)",
-                      r'\1\n        jvmTarget = "17"',
-                      content,
-                      count=1
-                  )
-          else:
-              content = re.sub(
-                  r"(android\s*\{)",
-                  r'\1\n    kotlinOptions { jvmTarget = "17" }\n',
-                  content,
-                  count=1
-              )
-
-          gradle_file.write_text(content, encoding="utf-8")
-          print("Java and Kotlin targets set to 17.")
-
-          kotlin_files = list(project.rglob("MainActivity.kt"))
-
-          if not kotlin_files:
-              raise SystemExit("ERROR: MainActivity.kt not found")
-
-          fixed = False
-
-          for kotlin_file in kotlin_files:
-              source = kotlin_file.read_text(encoding="utf-8")
-
-              updated = re.sub(
-                  r"\bsingleLine\s*=\s*true\b",
-                  "setSingleLine(true)",
-                  source
-              )
-
-              if updated != source:
-                  kotlin_file.write_text(updated, encoding="utf-8")
-                  fixed = True
-                  print("Fixed singleLine in:", kotlin_file)
-
-          if not fixed:
-              print("No singleLine issue found; source was left unchanged.")
-          PY
+          echo "Building source: $SOURCE"
+          nl -ba "$SOURCE" | sed -n '135,155p'
 
       - name: Build APK
         run: gradle -p "$PROJECT_DIR" assembleDebug

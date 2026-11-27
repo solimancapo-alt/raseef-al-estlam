@@ -4,9 +4,7 @@ name: Build Raseef Al Estlam APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '*.zip'
-      - '.github/workflows/build-apk.yml'
+    branches: [ main ]
 
 jobs:
   build:
@@ -16,135 +14,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install unzip
-        run: sudo apt-get update && sudo apt-get install -y unzip
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Locate project ZIP
-        shell: bash
+      - name: Extract source ZIP
+        id: locate
         run: |
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found."
+          set -e
+          ZIP="$(find . -maxdepth 1 -type f -name 'Raseef_Al_Estlam_v1.5_SOURCE.zip' -print -quit)"
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: v1.5 source ZIP not found"
             exit 1
           fi
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "Found ZIP: $ZIP_FILE"
+          mkdir -p build_source
+          unzip -q "$ZIP" -d build_source
 
-      - name: Extract project
-        run: |
-          mkdir -p extracted_project
-          unzip -o "$ZIP_FILE" -d extracted_project
+          PROJECT_DIR="$(dirname "$(find build_source -type f -name settings.gradle -print -quit)")"
 
-      - name: Locate Android project
-        shell: bash
-        run: |
-          APP_FILE=$(find extracted_project -type f -path "*/app/build.gradle" | head -n 1)
-
-          if [ -z "$APP_FILE" ]; then
-            echo "ERROR: app/build.gradle not found."
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: Android project files not found"
             exit 1
           fi
 
-          PROJECT_DIR="${APP_FILE%/app/build.gradle}"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-          echo "Project found: $PROJECT_DIR"
-
-      - name: Fix Kotlin JVM target
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-
-          path = os.path.join(os.environ["PROJECT_DIR"], "app", "build.gradle")
-
-          with open(path, "r", encoding="utf-8") as f:
-              content = f.read()
-
-          if re.search(r'kotlinOptions\s*\{', content):
-              content = re.sub(
-                  r'kotlinOptions\s*\{[^}]*\}',
-                  "kotlinOptions { jvmTarget = '1.8' }",
-                  content,
-                  count=1
-              )
-          else:
-              match = re.search(r'android\s*\{', content)
-              if not match:
-                  raise SystemExit("ERROR: android block not found")
-
-              content = (
-                  content[:match.end()]
-                  + "\n    kotlinOptions { jvmTarget = '1.8' }\n"
-                  + content[match.end():]
-              )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(content)
-
-          print("Kotlin JVM target set to 1.8")
-          PY
-
-      - name: Fix MainActivity button call
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-
-          path = os.path.join(
-              os.environ["PROJECT_DIR"],
-              "app", "src", "main", "java",
-              "com", "soliman", "counter", "MainActivity.kt"
-          )
-
-          with open(path, "r", encoding="utf-8") as f:
-              content = f.read()
-
-          old = '''showButton = button(if (tallyOnly) "عرض الكل" else "إظهار التقفيل") {
-                      tallyOnly = !tallyOnly; refresh()
-                  }'''
-
-          new = '''showButton = button(if (tallyOnly) "عرض الكل" else "إظهار التقفيل", action = {
-                      tallyOnly = !tallyOnly; refresh()
-                  })'''
-
-          if content.count(old) != 1:
-              raise SystemExit(
-                  "ERROR: Expected button code was not found exactly once. "
-                  "No automatic change was made."
-              )
-
-          content = content.replace(old, new, 1)
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(content)
-
-          print("MainActivity button call fixed successfully.")
-          PY
-
-      - name: Display corrected source
-        shell: bash
-        run: |
-          SOURCE="$PROJECT_DIR/app/src/main/java/com/soliman/counter/MainActivity.kt"
-
-          echo "===== CORRECTED MAINACTIVITY ====="
-          nl -ba "$SOURCE" | sed -n '140,151p'
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug
+        run: |
+          cd "${{ steps.locate.outputs.project_dir }}"
+          gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Raseef-Al-Estlam-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          path: ${{ steps.locate.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
